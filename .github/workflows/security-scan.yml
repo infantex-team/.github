@@ -1,0 +1,81 @@
+name: Security Scan
+
+on:
+  pull_request:
+    # TODO: set to this repo's protected / default branch (e.g. main, master, develop)
+    branches: [main]
+  workflow_dispatch: # manual re-run without a new commit
+
+concurrency:
+  group: security-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # required by gitleaks-action on PRs
+  actions: read
+
+jobs:
+  sast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Skip Dependabot PRs (token/permission noise); Official Semgrep CE sample
+    if: github.actor != 'dependabot[bot]'
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Semgrep
+        # TODO: match --config to this repo's tech stack.
+        # Keep p/default + p/owasp-top-ten; replace or add language packs, e.g.:
+        #   p/typescript  p/javascript  p/python  p/golang  p/java  p/react
+        #   p/nodejs  p/django  p/flask  p/spring-security  p/kubernetes
+        # Registry: https://semgrep.dev/r
+        run: >
+          semgrep scan
+          --config p/default
+          --config p/owasp-top-ten
+          --config p/typescript
+          --config p/nestjs
+          --config p/nodejs
+          --config p/secrets
+          --error
+          --metrics=off
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Official Trivy FS / repo scan pattern (v0.36.0)
+      - name: Trivy FS
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          ignore-unfixed: true
+          # TODO: adjust severity / exit policy for this repo (e.g. CRITICAL only, or exit-code: '0' while ramping up)
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          format: table
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Official gitleaks-action@v3 sample
+      # TODO: for org repos, add secret GITLEAKS_LICENSE (free key: https://gitleaks.io). Not needed for personal accounts.
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_VERSION: latest
